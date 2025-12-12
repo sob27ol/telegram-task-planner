@@ -1,0 +1,5 @@
+# Секретные файлы
+.env
+credentials.json
+__pycache__/
+*.pyc
