@@ -67,13 +67,11 @@ def init_google_sheets():
     Инициализация подключения к Google Sheets.
     """
     try:
-        # 1. Считываем JSON строку из переменной окружения
         creds_json_str = os.getenv('GOOGLE_CREDENTIALS_JSON')
         if not creds_json_str:
             logger.error("Переменная GOOGLE_CREDENTIALS_JSON не установлена.")
             return None
         
-        # 2. Парсим JSON из строки
         credentials_info = json.loads(creds_json_str) 
         
         scope = [
@@ -81,7 +79,6 @@ def init_google_sheets():
             'https://www.googleapis.com/auth/drive'
         ]
         
-        # 3. Создаем учетные данные напрямую из структуры данных
         creds = Credentials.from_service_account_info(credentials_info, scopes=scope)
         client = gspread.authorize(creds)
         
@@ -105,29 +102,42 @@ worksheet = init_google_sheets()
 # ==============================================================================
 
 def get_unique_values(worksheet, column_index, default_values=None):
-    """Получает уникальные значения из указанного столбца, исключая заголовок."""
+    """
+    Получает уникальные значения из указанного столбца, исключая заголовок
+    и добавляя базовую фильтрацию для отсеивания "мусора".
+    """
     if not worksheet:
         return default_values or []
 
     try:
-        # Индексация в gspread начинается с 1
         column_values = worksheet.col_values(column_index)
         
         if len(column_values) < START_ROW_INDEX:
             return default_values or []
         
-        # Исключаем заголовки и метаданные (до START_ROW_INDEX)
         data_values = column_values[START_ROW_INDEX - 1:] 
         
-        unique_set = {v.strip() for v in data_values if v.strip()}
+        unique_set = set()
+        for v in data_values:
+            v_stripped = v.strip()
+            if v_stripped:
+                # <-- ФИЛЬТРАЦИЯ МУСОРА: Отсеиваем слишком короткие или слишком длинные, 
+                # а также явные служебные слова, если это не Приоритет
+                if len(v_stripped) < 1 or len(v_stripped) > 50:
+                    continue
+                if v_stripped.upper() in ('FALSE', 'TRUE', 'ERROR', '#N/A'):
+                    continue
+                
+                unique_set.add(v_stripped)
         
         final_list = sorted(list(unique_set))
         
+        # Добавляем дефолтные значения, только если они еще не в списке
         if default_values:
             for dv in default_values:
                 if dv not in final_list:
-                    final_list.append(dv)
-        
+                    final_list.insert(0, dv) # Добавляем в начало для удобства
+
         return final_list
         
     except Exception as e:
@@ -215,7 +225,8 @@ async def add_task_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['deadline'] = deadline_date_str
 
     # Колонка 5 = E (для Приоритета)
-    priority_values = get_unique_values(worksheet, 5, default_values=['1', '2', '3', '4']) 
+    # Используем четкий набор приоритетов, если в таблице ничего нет, чтобы избежать мусора
+    priority_values = get_unique_values(worksheet, 5, default_values=['Высокий', 'Средний', 'Низкий']) 
     
     keyboard = []
     for value in priority_values:
@@ -246,6 +257,7 @@ async def add_task_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = update.message
 
     # Колонка 7 = G (для Категории)
+    # Используем четкий набор категорий, если в таблице ничего нет
     category_values = get_unique_values(worksheet, 7, default_values=['Личное', 'Работа', 'Учеба', 'Другое'])
 
     keyboard = []
@@ -264,7 +276,7 @@ async def add_task_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Шаг 5: Сохранение задачи в Google Sheets в первую пустую строку (A-H).
-    Исправлено: Название задачи теперь вносится в колонку B.
+    Исправлено: Поиск первой свободной строки теперь идет по колонке B.
     """
     query = update.callback_query
     category = None
@@ -284,8 +296,9 @@ async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     if worksheet:
         try:
-            # 1. Находим номер строки для вставки (ищем по колонке A)
-            task_column_values = worksheet.col_values(1)
+            # 1. Находим номер строки для вставки
+            # ИСПРАВЛЕНО: Теперь ищем по колонке 2 (B - Название задачи)
+            task_column_values = worksheet.col_values(2) 
             
             last_used_row = START_ROW_INDEX - 1
             for i, value in enumerate(task_column_values[START_ROW_INDEX - 1:], START_ROW_INDEX):
@@ -297,7 +310,6 @@ async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE
             gspread_row_index = last_used_row + 1
             
             # 2. Формула для колонки D ('Дни ⏳')
-            # Формула ссылается на C{индекс} (Срок)
             days_formula = f'=IF(ISBLANK(C{gspread_row_index}), "", C{gspread_row_index}-TODAY())'
             
             # 3. ФИНАЛЬНАЯ СТРУКТУРА СТРОКИ (8 элементов A-H)
@@ -305,7 +317,7 @@ async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE
             
             row_data = [
                 '',              # A (Кол 1) - Оставляем пустым для ID/номера
-                task_name,       # B (Кол 2) - Название задачи <--- ИСПРАВЛЕНО
+                task_name,       # B (Кол 2) - Название задачи
                 deadline,        # C (Кол 3) - Срок
                 days_formula,    # D (Кол 4) - Дни до срока (Формула)
                 priority,        # E (Кол 5) - Приоритет
@@ -370,7 +382,7 @@ async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, message
         
         message = "📋 Последние задачи:\n\n"
         for i, task in enumerate(tasks, 1):
-            # ИСПРАВЛЕНИЕ: Название задачи теперь читается из индекса 1 (Колонка B)
+            # Название задачи теперь читается из индекса 1 (Колонка B)
             task_name = task[1] if len(task) > 1 else 'Без названия'
             # Срок по-прежнему в индексе 2 (Колонка C)
             deadline = task[2] if len(task) > 2 else 'Срок не указан'
