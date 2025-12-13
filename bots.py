@@ -217,7 +217,6 @@ async def add_task_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Логика парсинга даты
     if deadline_input == 'завтра':
-        # Здесь используем сегодняшнюю дату: 2025-12-13, поэтому завтра будет 2025-12-14
         deadline_date_str = (today + dt.timedelta(days=1)).strftime('%Y-%m-%d')
     elif deadline_input.count('.') == 1 and len(deadline_input.split('.')[0]) <= 2:
         try:
@@ -235,7 +234,7 @@ async def add_task_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['deadline'] = deadline_date_str
 
     # Колонка 5 = E (для Приоритета)
-    # ИСПРАВЛЕНО: Используем только запрошенные приоритеты в качестве базы
+    # Используем четкие приоритеты
     default_priorities = ['Высокий', 'Срочный', 'Средний', 'Низкий']
     priority_values = get_unique_values(worksheet, 5, default_values=default_priorities) 
     
@@ -268,7 +267,7 @@ async def add_task_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = update.message
 
     # Колонка 7 = G (для Категории)
-    # ИСПРАВЛЕНО: Используем только запрошенные категории в качестве базы
+    # Используем четкие категории
     default_categories = ['Личное', 'Работа', 'Другое']
     category_values = get_unique_values(worksheet, 7, default_values=default_categories)
 
@@ -337,4 +336,62 @@ async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE
             ]
             
             # 4. Вставка данных с помощью update в диапазон A{индекс}:H{индекс}
-            range_label = f'A{gspread
+            # ИСПРАВЛЕННАЯ СТРОКА: SyntaxError: '{' was never closed
+            range_label = f'A{gspread_row_index}:H{gspread_row_index}'
+            worksheet.update(range_label, [row_data], value_input_option='USER_ENTERED')
+            
+            await message.reply_text(
+                f"✅ Задача успешно добавлена в таблицу в строку **{gspread_row_index}**!\n\n"
+                f"📋 Название: {task_name}\n"
+                f"📅 Срок: {deadline}\n"
+                f"⭐ Приоритет: {priority}\n"
+                f"📁 Категория: {category}"
+            )
+
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении задачи: {e}")
+            await message.reply_text(
+                f"❌ Ошибка при сохранении задачи в таблицу: {str(e)}"
+            )
+    else:
+        await message.reply_text(
+            "❌ Ошибка подключения к Google Sheets. Проверьте настройки."
+        )
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+# ==============================================================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ==============================================================================
+
+async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, message_source='message'):
+    """Показать последние задачи из таблицы"""
+    try:
+        if message_source == 'callback' and update.callback_query:
+            message_obj = update.callback_query.message
+        elif update.message:
+            message_obj = update.message
+        else:
+            logger.error("Не удалось определить объект для отправки сообщения.")
+            return
+
+        if not worksheet:
+            await message_obj.reply_text("❌ Ошибка подключения к Google Sheets. Проверьте настройки.")
+            return
+        
+        all_values = worksheet.get_all_values()
+        
+        if len(all_values) <= 1:
+            await message_obj.reply_text("📋 В таблице пока нет задач.")
+            return
+        
+        tasks = all_values[1:][-10:]
+        tasks.reverse()
+        
+        message = "📋 Последние задачи:\n\n"
+        for i, task in enumerate(tasks, 1):
+            # Название задачи читается из индекса 1 (Колонка B)
+            task_name = task[1] if len(task) > 1 else 'Без названия'
+            # Срок
