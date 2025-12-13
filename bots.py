@@ -103,8 +103,8 @@ worksheet = init_google_sheets()
 
 def get_unique_values(worksheet, column_index, default_values=None):
     """
-    Получает уникальные значения из указанного столбца, исключая заголовок
-    и добавляя базовую фильтрацию для отсеивания "мусора".
+    Получает уникальные значения из указанного столбца, исключая заголовок,
+    приоритезируя default_values и фильтруя "мусор".
     """
     if not worksheet:
         return default_values or []
@@ -117,28 +117,37 @@ def get_unique_values(worksheet, column_index, default_values=None):
         
         data_values = column_values[START_ROW_INDEX - 1:] 
         
-        unique_set = set()
+        unique_sheet_set = set()
         for v in data_values:
             v_stripped = v.strip()
+            # Фильтрация "мусора"
             if v_stripped:
-                # <-- ФИЛЬТРАЦИЯ МУСОРА: Отсеиваем слишком короткие или слишком длинные, 
-                # а также явные служебные слова, если это не Приоритет
                 if len(v_stripped) < 1 or len(v_stripped) > 50:
                     continue
                 if v_stripped.upper() in ('FALSE', 'TRUE', 'ERROR', '#N/A'):
                     continue
                 
-                unique_set.add(v_stripped)
+                unique_sheet_set.add(v_stripped)
         
-        final_list = sorted(list(unique_set))
+        ordered_unique_list = []
         
-        # Добавляем дефолтные значения, только если они еще не в списке
+        # 1. Добавляем пользовательские default_values в заданном порядке
         if default_values:
-            for dv in default_values:
-                if dv not in final_list:
-                    final_list.insert(0, dv) # Добавляем в начало для удобства
+            ordered_unique_list.extend(default_values)
+        
+        defaults_set = set(ordered_unique_list)
 
-        return final_list
+        # 2. Добавляем уникальные значения из таблицы, которых нет в default_values
+        sheet_items_to_add = []
+        
+        # Сортируем то, что осталось в таблице, для предсказуемости
+        for item in sorted(list(unique_sheet_set)):
+            if item not in defaults_set:
+                sheet_items_to_add.append(item)
+
+        ordered_unique_list.extend(sheet_items_to_add)
+
+        return ordered_unique_list
         
     except Exception as e:
         logger.warning(f"Ошибка при чтении уникальных значений из столбца {column_index}: {e}")
@@ -208,6 +217,7 @@ async def add_task_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Логика парсинга даты
     if deadline_input == 'завтра':
+        # Здесь используем сегодняшнюю дату: 2025-12-13, поэтому завтра будет 2025-12-14
         deadline_date_str = (today + dt.timedelta(days=1)).strftime('%Y-%m-%d')
     elif deadline_input.count('.') == 1 and len(deadline_input.split('.')[0]) <= 2:
         try:
@@ -225,8 +235,9 @@ async def add_task_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['deadline'] = deadline_date_str
 
     # Колонка 5 = E (для Приоритета)
-    # Используем четкий набор приоритетов, если в таблице ничего нет, чтобы избежать мусора
-    priority_values = get_unique_values(worksheet, 5, default_values=['Высокий', 'Средний', 'Низкий']) 
+    # ИСПРАВЛЕНО: Используем только запрошенные приоритеты в качестве базы
+    default_priorities = ['Высокий', 'Срочный', 'Средний', 'Низкий']
+    priority_values = get_unique_values(worksheet, 5, default_values=default_priorities) 
     
     keyboard = []
     for value in priority_values:
@@ -257,8 +268,9 @@ async def add_task_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = update.message
 
     # Колонка 7 = G (для Категории)
-    # Используем четкий набор категорий, если в таблице ничего нет
-    category_values = get_unique_values(worksheet, 7, default_values=['Личное', 'Работа', 'Учеба', 'Другое'])
+    # ИСПРАВЛЕНО: Используем только запрошенные категории в качестве базы
+    default_categories = ['Личное', 'Работа', 'Другое']
+    category_values = get_unique_values(worksheet, 7, default_values=default_categories)
 
     keyboard = []
     for value in category_values:
@@ -276,7 +288,7 @@ async def add_task_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Шаг 5: Сохранение задачи в Google Sheets в первую пустую строку (A-H).
-    Исправлено: Поиск первой свободной строки теперь идет по колонке B.
+    Поиск идет по колонке B.
     """
     query = update.callback_query
     category = None
@@ -296,8 +308,7 @@ async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     if worksheet:
         try:
-            # 1. Находим номер строки для вставки
-            # ИСПРАВЛЕНО: Теперь ищем по колонке 2 (B - Название задачи)
+            # 1. Находим номер строки для вставки. Ищем по колонке 2 (B - Название задачи)
             task_column_values = worksheet.col_values(2) 
             
             last_used_row = START_ROW_INDEX - 1
@@ -313,7 +324,6 @@ async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE
             days_formula = f'=IF(ISBLANK(C{gspread_row_index}), "", C{gspread_row_index}-TODAY())'
             
             # 3. ФИНАЛЬНАЯ СТРУКТУРА СТРОКИ (8 элементов A-H)
-            # A=Пусто/ID, B=Название, C=Срок, D=Дни, E=Приоритет, F=Выполнено, G=Категория, H=Заметки
             
             row_data = [
                 '',              # A (Кол 1) - Оставляем пустым для ID/номера
@@ -327,126 +337,4 @@ async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE
             ]
             
             # 4. Вставка данных с помощью update в диапазон A{индекс}:H{индекс}
-            range_label = f'A{gspread_row_index}:H{gspread_row_index}'
-            worksheet.update(range_label, [row_data], value_input_option='USER_ENTERED')
-            
-            await message.reply_text(
-                f"✅ Задача успешно добавлена в таблицу в строку **{gspread_row_index}**!\n\n"
-                f"📋 Название: {task_name}\n"
-                f"📅 Срок: {deadline}\n"
-                f"⭐ Приоритет: {priority}\n"
-                f"📁 Категория: {category}"
-            )
-
-        except Exception as e:
-            logger.error(f"Ошибка при сохранении задачи: {e}")
-            await message.reply_text(
-                f"❌ Ошибка при сохранении задачи в таблицу: {str(e)}"
-            )
-    else:
-        await message.reply_text(
-            "❌ Ошибка подключения к Google Sheets. Проверьте настройки."
-        )
-
-    context.user_data.clear()
-    return ConversationHandler.END
-
-
-# ==============================================================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-# ==============================================================================
-
-async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, message_source='message'):
-    """Показать последние задачи из таблицы"""
-    try:
-        if message_source == 'callback' and update.callback_query:
-            message_obj = update.callback_query.message
-        elif update.message:
-            message_obj = update.message
-        else:
-            logger.error("Не удалось определить объект для отправки сообщения.")
-            return
-
-        if not worksheet:
-            await message_obj.reply_text("❌ Ошибка подключения к Google Sheets. Проверьте настройки.")
-            return
-        
-        all_values = worksheet.get_all_values()
-        
-        if len(all_values) <= 1:
-            await message_obj.reply_text("📋 В таблице пока нет задач.")
-            return
-        
-        tasks = all_values[1:][-10:]
-        tasks.reverse()
-        
-        message = "📋 Последние задачи:\n\n"
-        for i, task in enumerate(tasks, 1):
-            # Название задачи теперь читается из индекса 1 (Колонка B)
-            task_name = task[1] if len(task) > 1 else 'Без названия'
-            # Срок по-прежнему в индексе 2 (Колонка C)
-            deadline = task[2] if len(task) > 2 else 'Срок не указан'
-            
-            # Статус выполнения в индексе 5 (Колонка F)
-            status = '✅ Выполнено' if len(task) > 5 and str(task[5]).upper() == 'TRUE' else '⏳ Не выполнено'
-            
-            message += f"{i}. [{status}] {task_name} (Срок: {deadline})\n"
-        
-        await message_obj.reply_text(message)
-    except Exception as e:
-        logger.error(f"Ошибка при чтении задач: {e}")
-        if update.callback_query:
-            await update.callback_query.message.reply_text(f"❌ Ошибка при чтении задач: {str(e)}")
-        elif update.message:
-            await update.message.reply_text(f"❌ Ошибка при чтении задач: {str(e)}")
-
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена операции"""
-    context.user_data.clear()
-    await update.message.reply_text("❌ Операция отменена.")
-    return ConversationHandler.END
-
-
-def main():
-    """Главная функция запуска бота"""
-    bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
-    
-    if not bot_token:
-        logger.error("TELEGRAM_BOT_TOKEN не установлен в .env файле!")
-        return
-    
-    if not worksheet:
-        logger.error("Не удалось подключиться к Google Sheets!")
-        return
-    
-    application = Application.builder().token(bot_token).build()
-    
-    conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(button_callback, pattern='^add_task$')],
-        states={
-            TASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_task_name)],
-            TASK_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_task_description)],
-            TASK_DEADLINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_task_deadline)],
-            TASK_PRIORITY: [
-                CallbackQueryHandler(add_task_priority, pattern='^priority_.+$'), 
-                MessageHandler(filters.TEXT & ~filters.COMMAND, add_task_priority) 
-            ],
-            TASK_CATEGORY: [
-                CallbackQueryHandler(save_task_to_sheets, pattern='^category_.+$'), 
-                MessageHandler(filters.TEXT & ~filters.COMMAND, save_task_to_sheets)
-            ],
-        },
-        fallbacks=[CommandHandler('cancel', cancel)] 
-    )
-    
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(conv_handler)
-    application.add_handler(CallbackQueryHandler(button_callback)) 
-    
-    logger.info("Бот запущен!")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
-
-
-if __name__ == '__main__':
-    main()
+            range_label = f'A{gspread
