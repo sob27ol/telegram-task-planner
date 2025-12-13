@@ -193,7 +193,7 @@ async def add_task_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         f"✅ Название задачи: {task_name}\n\n"
-        # ИСПРАВЛЕНО: Указываем колонку I
+        # ИСПРАВЛЕНО: Указываем колонку I для заметок
         "📝 Введите Заметки/Описание задачи (Колонка I) (или отправьте '-' чтобы пропустить):"
     )
     return TASK_DESCRIPTION 
@@ -235,6 +235,7 @@ async def add_task_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['deadline'] = deadline_date_str
 
     # Колонка 5 = E (для Приоритета)
+    # ИСПРАВЛЕНО: Строгие списки приоритетов
     default_priorities = ['Высокий', 'Срочный', 'Средний', 'Низкий']
     priority_values = get_unique_values(worksheet, 5, default_values=default_priorities) 
     
@@ -267,6 +268,7 @@ async def add_task_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = update.message
 
     # Колонка 7 = G (для Категории)
+    # ИСПРАВЛЕНО: Строгие списки категорий
     default_categories = ['Личное', 'Работа', 'Другое']
     category_values = get_unique_values(worksheet, 7, default_values=default_categories)
 
@@ -285,8 +287,8 @@ async def add_task_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Шаг 5: Сохранение задачи в Google Sheets в первую пустую строку (A-I).
-    Поиск идет по колонке B.
+    Шаг 5: Сохранение задачи в Google Sheets в первую пустую строку (B-I).
+    ВНИМАНИЕ: Столбец А (ID/номер) теперь не перезаписывается.
     """
     query = update.callback_query
     category = None
@@ -321,10 +323,9 @@ async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE
             # 2. Формула для колонки D ('Дни ⏳')
             days_formula = f'=IF(ISBLANK(C{gspread_row_index}), "", C{gspread_row_index}-TODAY())'
             
-            # 3. ФИНАЛЬНАЯ СТРУКТУРА СТРОКИ (9 элементов A-I)
-            
+            # 3. ФИНАЛЬНАЯ СТРУКТУРА СТРОКИ (8 элементов B-I)
+            # Список начинается с B (task_name), чтобы не перезаписывать A
             row_data = [
-                '',              # A (Кол 1) - ID/номер
                 task_name,       # B (Кол 2) - Название задачи
                 deadline,        # C (Кол 3) - Срок
                 days_formula,    # D (Кол 4) - Дни до срока (Формула)
@@ -335,9 +336,9 @@ async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE
                 description      # I (Кол 9) - Заметки/Описание (ИСПРАВЛЕНО)
             ]
             
-            # 4. Вставка данных с помощью update в диапазон A{индекс}:I{индекс}
-            # УВЕЛИЧИЛИ диапазон до I
-            range_label = f'A{gspread_row_index}:I{gspread_row_index}'
+            # 4. Вставка данных с помощью update в диапазон B{индекс}:I{индекс}
+            # ИСПРАВЛЕНО: Диапазон записи начинается с B, чтобы сохранить A
+            range_label = f'B{gspread_row_index}:I{gspread_row_index}'
             worksheet.update(range_label, [row_data], value_input_option='USER_ENTERED')
             
             await message.reply_text(
@@ -387,6 +388,7 @@ async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, message
             await message_obj.reply_text("📋 В таблице пока нет задач.")
             return
         
+        # Берем последние 10 задач, начиная со строки 2 (индекс 1)
         tasks = all_values[1:][-10:]
         tasks.reverse()
         
