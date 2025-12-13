@@ -193,12 +193,13 @@ async def add_task_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         f"✅ Название задачи: {task_name}\n\n"
-        "📝 Введите Заметки/Описание задачи (Колонка H) (или отправьте '-' чтобы пропустить):"
+        # ИСПРАВЛЕНО: Указываем колонку I
+        "📝 Введите Заметки/Описание задачи (Колонка I) (или отправьте '-' чтобы пропустить):"
     )
     return TASK_DESCRIPTION 
 
 async def add_task_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Шаг 2: Получение Заметок/Описания (Колонка H)"""
+    """Шаг 2: Получение Заметок/Описания (Колонка I)"""
     description = update.message.text
     context.user_data['description'] = description if description != '-' else ''
 
@@ -284,7 +285,7 @@ async def add_task_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Шаг 5: Сохранение задачи в Google Sheets в первую пустую строку (A-H).
+    Шаг 5: Сохранение задачи в Google Sheets в первую пустую строку (A-I).
     Поиск идет по колонке B.
     """
     query = update.callback_query
@@ -320,22 +321,23 @@ async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE
             # 2. Формула для колонки D ('Дни ⏳')
             days_formula = f'=IF(ISBLANK(C{gspread_row_index}), "", C{gspread_row_index}-TODAY())'
             
-            # 3. ФИНАЛЬНАЯ СТРУКТУРА СТРОКИ (8 элементов A-H)
+            # 3. ФИНАЛЬНАЯ СТРУКТУРА СТРОКИ (9 элементов A-I)
             
             row_data = [
-                '',              # A (Кол 1) - Оставляем пустым для ID/номера
+                '',              # A (Кол 1) - ID/номер
                 task_name,       # B (Кол 2) - Название задачи
                 deadline,        # C (Кол 3) - Срок
                 days_formula,    # D (Кол 4) - Дни до срока (Формула)
                 priority,        # E (Кол 5) - Приоритет
                 'FALSE',         # F (Кол 6) - Выполнено (Флажок)
                 category,        # G (Кол 7) - Категория
-                description      # H (Кол 8) - Заметки
+                '',              # H (Кол 8) - ВРЕМЯ (Оставляем пустым)
+                description      # I (Кол 9) - Заметки/Описание (ИСПРАВЛЕНО)
             ]
             
-            # 4. Вставка данных с помощью update в диапазон A{индекс}:H{индекс}
-            # ИСПРАВЛЕННАЯ СТРОКА: Устранена синтаксическая ошибка
-            range_label = f'A{gspread_row_index}:H{gspread_row_index}'
+            # 4. Вставка данных с помощью update в диапазон A{индекс}:I{индекс}
+            # УВЕЛИЧИЛИ диапазон до I
+            range_label = f'A{gspread_row_index}:I{gspread_row_index}'
             worksheet.update(range_label, [row_data], value_input_option='USER_ENTERED')
             
             await message.reply_text(
