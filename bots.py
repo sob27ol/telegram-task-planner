@@ -3,7 +3,6 @@ import logging
 import json
 from datetime import datetime
 import datetime as dt 
-# Импорт Update, InlineKeyboardButton, InlineKeyboardMarkup, ContextTypes из telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -160,7 +159,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if query.data == 'add_task':
         await query.message.reply_text(
-            "📝 Введите название задачи (Колонка A):"
+            "📝 Введите название задачи (Колонка B):"
         )
         return TASK_NAME 
     
@@ -169,12 +168,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
 async def add_task_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Шаг 1: Получение Названия Задачи (Колонка A)"""
+    """Шаг 1: Получение Названия Задачи (Колонка B)"""
     task_name = update.message.text
     context.user_data['task_name'] = task_name
-    
-    # В исходном коде название задачи использовало колонку A,
-    # а заметки — колонку H. Мы сохраняем это.
     
     await update.message.reply_text(
         f"✅ Название задачи: {task_name}\n\n"
@@ -200,7 +196,7 @@ async def add_task_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today = datetime.now().date()
     deadline_date_str = deadline_input
     
-    # Логика парсинга даты: 'завтра' или 'ДД.ММ'
+    # Логика парсинга даты
     if deadline_input == 'завтра':
         deadline_date_str = (today + dt.timedelta(days=1)).strftime('%Y-%m-%d')
     elif deadline_input.count('.') == 1 and len(deadline_input.split('.')[0]) <= 2:
@@ -229,7 +225,6 @@ async def add_task_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"📅 Срок (для записи): {deadline_date_str}\n\n"
-        # Указываем новую колонку для приоритета (E)
         "⭐ Выберите Приоритет (Колонка E) (или введите вручную):",
         reply_markup=reply_markup
     )
@@ -261,15 +256,16 @@ async def add_task_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await message.reply_text(
         f"⭐ Приоритет: {priority_value}\n\n"
-        # Указываем новую колонку для категории (G)
         "📁 Выберите Категорию (Колонка G) (или введите вручную):",
         reply_markup=reply_markup
     )
     return TASK_CATEGORY 
 
 async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Шаг 5: Сохранение задачи в Google Sheets в первую пустую строку (A-H)"""
-    # Исправлена ошибка NameError: Update и ContextTypes теперь корректно импортированы.
+    """
+    Шаг 5: Сохранение задачи в Google Sheets в первую пустую строку (A-H).
+    Исправлено: Название задачи теперь вносится в колонку B.
+    """
     query = update.callback_query
     category = None
 
@@ -288,10 +284,9 @@ async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     if worksheet:
         try:
-            # 1. Находим номер строки для вставки
+            # 1. Находим номер строки для вставки (ищем по колонке A)
             task_column_values = worksheet.col_values(1)
             
-            # Находим последнюю строку, которая не пуста, начиная с 5-й строки.
             last_used_row = START_ROW_INDEX - 1
             for i, value in enumerate(task_column_values[START_ROW_INDEX - 1:], START_ROW_INDEX):
                 if value.strip():
@@ -305,17 +300,17 @@ async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE
             # Формула ссылается на C{индекс} (Срок)
             days_formula = f'=IF(ISBLANK(C{gspread_row_index}), "", C{gspread_row_index}-TODAY())'
             
-            # 3. НОВАЯ СТРУКТУРА СТРОКИ ДЛЯ ВСТАВКИ (8 элементов A-H)
-            # A=Название, B=Пусто, C=Срок, D=Дни, E=Приоритет, F=Выполнено, G=Категория, H=Заметки
+            # 3. ФИНАЛЬНАЯ СТРУКТУРА СТРОКИ (8 элементов A-H)
+            # A=Пусто/ID, B=Название, C=Срок, D=Дни, E=Приоритет, F=Выполнено, G=Категория, H=Заметки
             
             row_data = [
-                task_name,       # A (Кол 1) - Название
-                '',              # B (Кол 2) - Пусто (если в B нет данных)
+                '',              # A (Кол 1) - Оставляем пустым для ID/номера
+                task_name,       # B (Кол 2) - Название задачи <--- ИСПРАВЛЕНО
                 deadline,        # C (Кол 3) - Срок
-                days_formula,    # D (Кол 4) - Дни до срока (Формула) <-- НОВАЯ ПОЗИЦИЯ
-                priority,        # E (Кол 5) - Приоритет <-- НОВАЯ ПОЗИЦИЯ
-                'FALSE',         # F (Кол 6) - Выполнено (Флажок) <-- НОВАЯ ПОЗИЦИЯ
-                category,        # G (Кол 7) - Категория <-- НОВАЯ ПОЗИЦИЯ
+                days_formula,    # D (Кол 4) - Дни до срока (Формула)
+                priority,        # E (Кол 5) - Приоритет
+                'FALSE',         # F (Кол 6) - Выполнено (Флажок)
+                category,        # G (Кол 7) - Категория
                 description      # H (Кол 8) - Заметки
             ]
             
@@ -366,22 +361,21 @@ async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, message
         
         all_values = worksheet.get_all_values()
         
-        # Данные начинаются со строки 5 (индекс 4), но в этом простом отчете мы берем все, кроме заголовка
         if len(all_values) <= 1:
             await message_obj.reply_text("📋 В таблице пока нет задач.")
             return
         
-        # Берем последние 10 задач, начиная со строки 2 (индекс 1)
         tasks = all_values[1:][-10:]
         tasks.reverse()
         
         message = "📋 Последние задачи:\n\n"
         for i, task in enumerate(tasks, 1):
-            # Предполагаем, что A=Название (индекс 0), C=Срок (индекс 2), F=Выполнено (индекс 5)
-            task_name = task[0] if len(task) > 0 else 'Без названия'
+            # ИСПРАВЛЕНИЕ: Название задачи теперь читается из индекса 1 (Колонка B)
+            task_name = task[1] if len(task) > 1 else 'Без названия'
+            # Срок по-прежнему в индексе 2 (Колонка C)
             deadline = task[2] if len(task) > 2 else 'Срок не указан'
             
-            # Проверка статуса выполнения (Колонка F, индекс 5)
+            # Статус выполнения в индексе 5 (Колонка F)
             status = '✅ Выполнено' if len(task) > 5 and str(task[5]).upper() == 'TRUE' else '⏳ Не выполнено'
             
             message += f"{i}. [{status}] {task_name} (Срок: {deadline})\n"
