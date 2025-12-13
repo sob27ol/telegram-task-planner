@@ -234,7 +234,6 @@ async def add_task_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['deadline'] = deadline_date_str
 
     # Колонка 5 = E (для Приоритета)
-    # Используем четкие приоритеты
     default_priorities = ['Высокий', 'Срочный', 'Средний', 'Низкий']
     priority_values = get_unique_values(worksheet, 5, default_values=default_priorities) 
     
@@ -267,7 +266,6 @@ async def add_task_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = update.message
 
     # Колонка 7 = G (для Категории)
-    # Используем четкие категории
     default_categories = ['Личное', 'Работа', 'Другое']
     category_values = get_unique_values(worksheet, 7, default_values=default_categories)
 
@@ -336,7 +334,7 @@ async def save_task_to_sheets(update: Update, context: ContextTypes.DEFAULT_TYPE
             ]
             
             # 4. Вставка данных с помощью update в диапазон A{индекс}:H{индекс}
-            # ИСПРАВЛЕННАЯ СТРОКА: SyntaxError: '{' was never closed
+            # ИСПРАВЛЕННАЯ СТРОКА: Устранена синтаксическая ошибка
             range_label = f'A{gspread_row_index}:H{gspread_row_index}'
             worksheet.update(range_label, [row_data], value_input_option='USER_ENTERED')
             
@@ -394,4 +392,70 @@ async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, message
         for i, task in enumerate(tasks, 1):
             # Название задачи читается из индекса 1 (Колонка B)
             task_name = task[1] if len(task) > 1 else 'Без названия'
-            # Срок
+            # Срок в индексе 2 (Колонка C)
+            deadline = task[2] if len(task) > 2 else 'Срок не указан'
+            
+            # Статус выполнения в индексе 5 (Колонка F)
+            status = '✅ Выполнено' if len(task) > 5 and str(task[5]).upper() == 'TRUE' else '⏳ Не выполнено'
+            
+            message += f"{i}. [{status}] {task_name} (Срок: {deadline})\n"
+        
+        await message_obj.reply_text(message)
+    
+    except Exception as e:
+        logger.error(f"Ошибка при чтении задач: {e}")
+        if update.callback_query:
+            await update.callback_query.message.reply_text(f"❌ Ошибка при чтении задач: {str(e)}")
+        elif update.message:
+            await update.message.reply_text(f"❌ Ошибка при чтении задач: {str(e)}")
+
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена операции"""
+    context.user_data.clear()
+    await update.message.reply_text("❌ Операция отменена.")
+    return ConversationHandler.END
+
+
+def main():
+    """Главная функция запуска бота"""
+    bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+    
+    if not bot_token:
+        logger.error("TELEGRAM_BOT_TOKEN не установлен в .env файле!")
+        return
+    
+    if not worksheet:
+        logger.error("Не удалось подключиться к Google Sheets!")
+        return
+    
+    application = Application.builder().token(bot_token).build()
+    
+    conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(button_callback, pattern='^add_task$')],
+        states={
+            TASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_task_name)],
+            TASK_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_task_description)],
+            TASK_DEADLINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_task_deadline)],
+            TASK_PRIORITY: [
+                CallbackQueryHandler(add_task_priority, pattern='^priority_.+$'), 
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_task_priority) 
+            ],
+            TASK_CATEGORY: [
+                CallbackQueryHandler(save_task_to_sheets, pattern='^category_.+$'), 
+                MessageHandler(filters.TEXT & ~filters.COMMAND, save_task_to_sheets)
+            ],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)] 
+    )
+    
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(conv_handler)
+    application.add_handler(CallbackQueryHandler(button_callback)) 
+    
+    logger.info("Бот запущен!")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+if __name__ == '__main__':
+    main()
